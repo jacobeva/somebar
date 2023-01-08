@@ -13,15 +13,14 @@ constexpr int paddingY = 3;
 constexpr const char* font = "Monospace 15";
 
 constexpr ColorScheme colorInactive = {Color(0xbb, 0xbb, 0xbb), Color(0x22, 0x22, 0x22)};
-constexpr ColorScheme colorActive = {Color(0xee, 0xee, 0xee), Color(0xea, 0x82, 0x17)};
+constexpr ColorScheme colorActive = {Color(0xee, 0xee, 0xee), Color(0xf3, 0x0b, 0x0b)};
 constexpr const char* termcmd[] = {"foot", nullptr};
 
-static std::vector<std::string> tagNames = {
-	"1", "2", "3",
-	"4", "5", "6",
-	"7", "8", "9",
-};
-
 constexpr Button buttons[] = {
+	{ ClkTagBar,       BTN_LEFT,   view,       {0} },
+	{ ClkTagBar,       BTN_RIGHT,  tag,        {0} },
+	{ ClkTagBar,       BTN_MIDDLE, toggletag,  {0} },
+	{ ClkLayoutSymbol, BTN_LEFT,   setlayout,  {.ui = 0} },
+	{ ClkLayoutSymbol, BTN_RIGHT,  setlayout,  {.ui = 2} },
 	{ ClkStatusText,   BTN_RIGHT,  spawn,      {.v = termcmd} },
 };
