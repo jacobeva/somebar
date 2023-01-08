@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <sstream>
 #include <list>
 #include <optional>
 #include <utility>
@@ -22,6 +23,7 @@
 #include "xdg-shell-client-protocol.h"
 #include "net-tapesoftware-dwl-wm-unstable-v1-client-protocol.h"
 #include "common.hpp"
+#include "config.hpp"
 #include "bar.hpp"
 #include "line_buffer.hpp"
 
@@ -54,6 +56,8 @@ static void updatemon(Monitor &mon);
 static void onReady();
 static void setupStatusFifo();
 static void onStatus();
+static void onStdin();
+static void handleStdin(const std::string& line);
 static void updateVisibility(const std::string& name, bool(*updater)(bool));
 static void onGlobalAdd(void*, wl_registry* registry, uint32_t name, const char* interface, uint32_t version);
 static void onGlobalRemove(void*, wl_registry* registry, uint32_t name);
@@ -299,6 +303,7 @@ void onReady()
 	for (auto output : uninitializedOutputs) {
 		setupMonitor(output.first, output.second);
 	}
+	wl_display_roundtrip(display); // wait for xdg_output names before we read stdin
 }
 
 bool createFifo(std::string path)
@@ -343,6 +348,66 @@ void setupStatusFifo()
 			return;
 		}
 	}
+}
+
+static LineBuffer<512> stdinBuffer;
+static void onStdin()
+{
+	auto res = stdinBuffer.readLines(
+		[](void* p, size_t size) { return read(0, p, size); },
+		[](char* p, size_t size) { handleStdin({p, size}); });
+	if (res == 0) {
+		quitting = true;
+	}
+}
+
+static void handleStdin(const std::string& line)
+{
+	// this parses the lines that dwl sends in printstatus()
+	std::string monName, command;
+	auto stream = std::istringstream {line};
+	stream >> monName >> command;
+	if (!stream.good()) {
+		return;
+	}
+	auto mon = std::find_if(begin(monitors), end(monitors), [&](const Monitor& mon) {
+		return mon.xdgName == monName;
+	});
+	if (mon == end(monitors))
+		return;
+	if (command == "title") {
+		auto title = std::string {};
+ 		std::getline(stream, title);
+		mon->bar.setTitle(title);
+	} else if (command == "selmon") {
+		uint32_t selected;
+		stream >> selected;
+		mon->bar.setSelected(selected);
+		if (selected) {
+			selmon = &*mon;
+		} else if (selmon == &*mon) {
+			selmon = nullptr;
+		}
+	} else if (command == "tags") {
+		uint32_t occupied, tags, clientTags, urgent;
+		stream >> occupied >> tags >> clientTags >> urgent;
+		for (auto i=0u; i<tagNames.size(); i++) {
+			auto tagMask = 1 << i;
+			int state = TagState::None;
+			if (tags & tagMask)
+				state |= TagState::Active;
+			if (urgent & tagMask)
+				state |= TagState::Urgent;
+			mon->bar.setTag(i, state, occupied & tagMask ? 1 : 0, clientTags & tagMask ? 0 : -1);
+		}
+		mon->tags = tags;
+	} else if (command == "layout") {
+		auto layout = std::string {};
+		std::getline(stream, layout);
+		mon->bar.setLayout(layout);
+	}
+	mon->hasData = true;
+	updatemon(*mon);
 }
 
 const std::string prefixStatus = "status ";
@@ -536,6 +601,10 @@ int main(int argc, char* argv[])
 		.fd = displayFd,
 		.events = POLLIN,
 	});
+	pollfds.push_back({
+		.fd = STDIN_FILENO,
+		.events = POLLIN,
+	});
 	if (fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK) < 0) {
 		diesys("fcntl F_SETFL");
 	}
@@ -560,6 +629,8 @@ int main(int argc, char* argv[])
 						ev.events = POLLIN;
 						waylandFlush();
 					}
+				} else if (ev.fd == STDIN_FILENO && (ev.revents & POLLIN)) {
+					onStdin();
 				} else if (ev.fd == statusFifoFd && (ev.revents & POLLIN)) {
 					onStatus();
 				} else if (ev.fd == signalSelfPipe[0] && (ev.revents & POLLIN)) {
